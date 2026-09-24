@@ -1,0 +1,299 @@
+#ifndef SONORA_APP_BUILD_CONFIG_H
+#define SONORA_APP_BUILD_CONFIG_H
+
+/*
+ * Top-level application selection.
+ *
+ * APP_BUILD selects one variation.  The variation structurally selects exactly
+ * one application; application-specific expansion is delegated to that app's
+ * build-config header below.  Keep the numeric APP_BUILD values stable because
+ * existing MPLAB and command-line builds may pass them with -DAPP_BUILD=... .
+ */
+
+/*
+ * APP_BUILD profile metadata.
+ *
+ * Every '#define APP_BUILD_<name> (n)' below carries a trailing comment holding
+ * ';'-separated fields, and this header is the single source of truth for all of
+ * them: the buildtools scripts parse the comment instead of keeping their own
+ * lists, so there is no second place to update.
+ *
+ *   #define APP_BUILD_STD_DEMO_1 (1)  / * tier: normal; artifact: classic1; display: Classic 1 * /
+ *
+ * tier: normal|advanced|internal
+ *   How widely the preset is offered (see below). A preset without a marker is
+ *   reported as 'unclassified' and hidden from every list - it is never silently
+ *   treated as normal.
+ *
+ * artifact: <lower-case token>
+ *   The stable filename token for this profile's serial update package
+ *   (artifacts/serial_update_packages/sonora_<artifact>_<timestamp>.sfb). Lower
+ *   case letters, digits and underscore only, unique across profiles. Declared
+ *   here rather than abbreviated by a script, so that renaming a display name
+ *   never renames files. Building a serial update package for a profile with no
+ *   artifact tag is refused rather than given an ambiguous name.
+ *
+ * display: <free text>
+ *   What the interactive menus call this profile. The APP_BUILD_* name is an
+ *   internal identifier and is not what a user should have to choose from.
+ *
+ * normal:
+ *   Standard user-facing presets.
+ *   Shown in the default interactive preset list.
+ *   Included in the regular smoke-test scope.
+ *
+ * advanced:
+ *   User-facing presets for specialized hardware or use cases.
+ *   Hidden from the default interactive preset list (switch_config.ps1
+ *   -Advanced shows them).
+ *   Included in the supported build scope.
+ *
+ * internal:
+ *   Developer, measurement, reproduction, load-check and fault-isolation
+ *   presets.
+ *   Hidden from the default interactive preset list (switch_config.ps1 -All
+ *   shows them).
+ *   Outside the regular smoke-test contract, so one may temporarily fail to
+ *   build during development. Naming it explicitly with -Preset always works.
+ *
+ * Tier says nothing about which application a preset belongs to, and nothing
+ * about per-device availability (see src/app_specific_config_defs.h).
+ */
+#define SONORA_APP_CLASSIC_AUDIO_DEMO  (1)
+#define SONORA_APP_ASRC                (2)
+
+/* Classic Audio Demo variations. */
+#define APP_BUILD_STD_DEMO_1           (1)  /* tier: normal; artifact: classic1; display: Classic 1 */
+#define APP_BUILD_STD_DEMO_2           (2)  /* tier: normal; artifact: classic2; display: Classic 2 */
+#define APP_BUILD_DRC_DEMO             (3)  /* tier: normal; artifact: classic_drc; display: Classic DRC */
+#define APP_BUILD_USB_48               (4)  /* tier: advanced; artifact: classic_usb48; display: Classic USB 48k */
+#define APP_BUILD_USB_96               (5)  /* tier: advanced; artifact: classic_usb96; display: Classic USB 96k */
+#define APP_BUILD_DEMO_96K             (6)  /* tier: normal; artifact: classic_96k; display: Classic 96k */
+
+/* ASRC App variations. */
+#define APP_BUILD_ASRC_CODEC_BIDIR     (7)  /* tier: normal; artifact: asrc_bi; display: ASRC Codec BI */
+#define APP_BUILD_ASRC_CODEC_A_B_ONLY  (8)  /* tier: internal; artifact: asrc_a_to_b; display: ASRC Codec A-to-B */
+#define APP_BUILD_ASRC_CODEC_B_A_ONLY  (9)  /* tier: internal; artifact: asrc_b_to_a; display: ASRC Codec B-to-A */
+#define APP_BUILD_ASRC_CODEC_MEAS      (10) /* tier: advanced; artifact: asrc_meas; display: ASRC Codec measurement */
+#define APP_BUILD_ASRC_DSPIC_BIDIR     (11) /* tier: normal; artifact: asrc_dspic_bi; display: ASRC dsPIC BI */
+#define APP_BUILD_ASRC_DSPIC_LIGHT     (12) /* tier: internal; artifact: asrc_dspic_light; display: ASRC dsPIC light */
+#define APP_BUILD_ASRC_CODEC_BIDIR_SPI34_TEST (13)   /* tier: internal; artifact: asrc_bi_spi34; display: ASRC Codec BI SPI3/4 test */
+#define APP_BUILD_ASRC_DECIMATOR_MEAS  (14) /* tier: internal; artifact: asrc_decimator_meas; display: ASRC decimator measurement */
+#define APP_BUILD_ASRC_48K_TO_8K_INTEGRATION (15)    /* tier: internal; artifact: asrc_48k_to_8k; display: ASRC 48k-to-8k integration */
+#define APP_BUILD_ASRC_CODEC_BIDIR_HEADROOM_M32 (16) /* tier: internal; artifact: asrc_bi_m32; display: ASRC Codec BI headroom M32 */
+#define APP_BUILD_ASRC_CODEC_BIDIR_HEADROOM_M30 (17) /* tier: internal; artifact: asrc_bi_m30; display: ASRC Codec BI headroom M30 */
+#define APP_BUILD_ASRC_CODEC_MEAS_HEADROOM_M30  (18) /* tier: internal; artifact: asrc_meas_m30; display: ASRC Codec measurement headroom M30 */
+/* 96 kHz bring-up: physical I2S 2 ch (L/R) with an 8-channel internal ASRC
+ * compute width, one-way A->B, WM8904-B codec-master on its own XTAL.  The
+ * WM8904 cannot run ADC and DAC simultaneously at or above its 88.2 kHz
+ * boundary, which at 96 kHz is exactly this build, so A is
+ * ADC-only and B is DAC-only and bidirectional ASRC is structurally
+ * impossible at this rate (guarded in asrc_app_validate.h). */
+#define APP_BUILD_ASRC_CODEC_96K_A_TO_B (21) /* tier: internal; artifact: asrc_96k_a_to_b; display: ASRC Codec 96k A-to-B */
+/* 96 kHz DIGITAL QUALITY CAPTURE (THD+N / DR), one preset per direction.  Same MEAS harness as
+ * preset 10 -- an on-chip sine is injected into the resampler input in software and its output is
+ * captured in software, so the codec never carries the test signal and the WM8904's
+ * no-simultaneous-ADC+DAC limit at 96 kHz does not apply (that limit is about the ANALOG path).
+ *
+ * 96K_MEAS_A_TO_B  : leg A at 96 kHz.  With leg B at 48 kHz this measures the DIRECT resampler at
+ *                    step 2.0; with leg B at 8/11.025/12/16 kHz it measures the composed
+ *                    /2 pre-stage + 48 kHz chain (the rows the runtime gate serves).
+ * 96K_MEAS_B_TO_A  : the UPsampling direction, 48 k -> 96 k.  No front end is involved, so this is
+ *                    the clean reference point for the resampler alone.
+ *
+ * Tone note: the tables are sample-domain exact, not absolute-frequency (audio_app_meas_tones.h),
+ * so on a 96 kHz leg the LOW tone lands at 2 kHz -- a valid THD+N/DR fundamental -- while the HIGH
+ * tone lands at 36 kHz, above a 48 kHz leg's Nyquist.  Use the LOW tone on a 96 kHz source. */
+#define APP_BUILD_ASRC_MEAS_96K_A_TO_B  (22) /* tier: internal; artifact: asrc_meas_96k_a_to_b; display: ASRC measurement 96k A-to-B */
+#define APP_BUILD_ASRC_MEAS_96K_B_TO_A  (23) /* tier: internal; artifact: asrc_meas_96k_b_to_a; display: ASRC measurement 96k B-to-A */
+#define APP_BUILD_ASRC_AK128_CODEC_BIDIR (24) /* tier: internal; artifact: asrc_ak128_bi; display: ASRC AK128 Bi-Codec */
+/* Experimental 96 kHz leg A -> 32 kHz leg B measurement profile: 12 channels
+ * each way, two engines, Q31 sample path, rear polyphase M=30, HB31 pre-stage,
+ * and optimized Q31 row kernels. This is not the supported AK506 Nano
+ * configuration.
+ *
+ * The third-band 96 -> 32 kHz front end is NOT part of the preset.  It is opted into with
+ * -Define APP_ASRC_THIRDBAND_96_TO_32=1, which COMPILES it; whether it is the front end
+ * actually filtering is a separate, runtime question (APP_ASRC_THIRDBAND_DEFAULT_ON, then
+ * `*av00`/`*av01`). The banner reports compilation; runtime telemetry reports
+ * the active front end.
+ *
+ * The ANALOG path is still one-way.  At 96 kHz the WM8904 cannot run ADC and DAC at
+ * once, so leg A is ADC-only and leg B DAC-only exactly as in 96K_A_TO_B.  Two engines
+ * is a DSP-width statement, not an analog one: the B->A engine resamples an idle
+ * capture line at full width. Validate timing after changes and after changing
+ * the runtime leg-B rate (`*ar`). */
+#define APP_BUILD_ASRC_CODEC_96K_12CH_32K (25) /* tier: internal; artifact: asrc_96k_12ch_32k; display: ASRC Codec 96k 12ch to 32k */
+/* This compatibility switch remains defined so an unsupported value fails with
+ * a clear diagnostic. */
+#ifndef APP_ASRC_EXPERIMENTAL_M28
+  #define APP_ASRC_EXPERIMENTAL_M28  (0)
+#endif
+#if (APP_ASRC_EXPERIMENTAL_M28 != 0) && (APP_ASRC_EXPERIMENTAL_M28 != 1)
+  #error "APP_ASRC_EXPERIMENTAL_M28 must be 0 or 1"
+#endif
+
+#ifndef APP_BUILD
+  #if defined(SONORA_MPLAB_APP_ASRC)
+    #define APP_BUILD  (APP_BUILD_ASRC_CODEC_BIDIR)
+  #else
+    #define APP_BUILD  (APP_BUILD_STD_DEMO_1)
+  #endif
+#endif
+
+#if (APP_BUILD >= APP_BUILD_STD_DEMO_1) && (APP_BUILD <= APP_BUILD_DEMO_96K)
+  #define SONORA_APP  SONORA_APP_CLASSIC_AUDIO_DEMO
+#elif (APP_BUILD >= APP_BUILD_ASRC_CODEC_BIDIR) && (APP_BUILD <= APP_BUILD_ASRC_CODEC_96K_12CH_32K)
+  #define SONORA_APP  SONORA_APP_ASRC
+#else
+  #error "APP_BUILD is not a known Classic Audio Demo or ASRC App variation."
+#endif
+
+#define SONORA_APP_IS_CLASSIC  (SONORA_APP == SONORA_APP_CLASSIC_AUDIO_DEMO)
+#define SONORA_APP_IS_ASRC     (SONORA_APP == SONORA_APP_ASRC)
+
+/* Exact preset identity for self-identifying boot logs. */
+#if (APP_BUILD == APP_BUILD_STD_DEMO_1)
+  #define APP_BUILD_NAME    "APP_BUILD_STD_DEMO_1"
+  #define APP_BUILD_DETAIL  "co-clocked dual codec; WM8904-A drives BCLK/FS, B slave"
+#elif (APP_BUILD == APP_BUILD_STD_DEMO_2)
+  #define APP_BUILD_NAME    "APP_BUILD_STD_DEMO_2"
+  #define APP_BUILD_DETAIL  "co-clocked dual codec; dsPIC drives BCLK/FS"
+#elif (APP_BUILD == APP_BUILD_DRC_DEMO)
+  #define APP_BUILD_NAME    "APP_BUILD_DRC_DEMO"
+  #define APP_BUILD_DETAIL  "co-clocked dual codec; DF2T DRC cascade"
+#elif (APP_BUILD == APP_BUILD_USB_48)
+  #define APP_BUILD_NAME    "APP_BUILD_USB_48"
+  #define APP_BUILD_DETAIL  "USB audio input; 48 kHz"
+#elif (APP_BUILD == APP_BUILD_USB_96)
+  #define APP_BUILD_NAME    "APP_BUILD_USB_96"
+  #define APP_BUILD_DETAIL  "USB audio input; 96 kHz"
+#elif (APP_BUILD == APP_BUILD_DEMO_96K)
+  #define APP_BUILD_NAME    "APP_BUILD_DEMO_96K"
+  #define APP_BUILD_DETAIL  "non-USB 96 kHz; co-clocked dual codec"
+#elif (APP_BUILD == APP_BUILD_ASRC_CODEC_BIDIR)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_CODEC_BIDIR"
+  /* No APP_ASRC_EXPERIMENTAL_M28 branch here any more: the switch is retired for the whole
+   * AK512 M30 family (see asrc/asrc_app_build_config.h) and errors out before this banner
+   * text would matter, so a live #else here was already dead in practice and is now dead
+   * by construction too. */
+  #define APP_BUILD_DETAIL  "ASRC production M30 Kaiser-11 fc0.465; bidirectional A<->B; auto low-rate front-end; sparse LED meter; 10 s telemetry"
+#elif (APP_BUILD == APP_BUILD_ASRC_CODEC_A_B_ONLY)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_CODEC_A_B_ONLY"
+  #define APP_BUILD_DETAIL  "ASRC; codec master; one-way A->B"
+#elif (APP_BUILD == APP_BUILD_ASRC_CODEC_B_A_ONLY)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_CODEC_B_A_ONLY"
+  #define APP_BUILD_DETAIL  "ASRC; codec master; one-way B->A"
+#elif (APP_BUILD == APP_BUILD_ASRC_CODEC_MEAS)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_CODEC_MEAS"
+  /* Same retirement as APP_BUILD_ASRC_CODEC_BIDIR above -- no M28 branch left. */
+  #define APP_BUILD_DETAIL  "ASRC production M30 Kaiser-11 fc0.465; one-way digital quality capture"
+#elif (APP_BUILD == APP_BUILD_ASRC_DSPIC_BIDIR)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_DSPIC_BIDIR"
+  #define APP_BUILD_DETAIL  "ASRC; dsPIC master; bidirectional A<->B"
+#elif (APP_BUILD == APP_BUILD_ASRC_DSPIC_LIGHT)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_DSPIC_LIGHT"
+  #define APP_BUILD_DETAIL  "ASRC; dsPIC master; LIGHT load test"
+#elif (APP_BUILD == APP_BUILD_ASRC_CODEC_BIDIR_SPI34_TEST)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_CODEC_BIDIR_SPI34_TEST"
+  #define APP_BUILD_DETAIL  "ASRC; WM8904-B codec master; bidirectional A<->B; physical SPI3/SPI4 test bank"
+#elif (APP_BUILD == APP_BUILD_ASRC_DECIMATOR_MEAS)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_DECIMATOR_MEAS"
+  #define APP_BUILD_DETAIL  "fixed 48-to-8 kHz decimator; standalone digital measurement"
+#elif (APP_BUILD == APP_BUILD_ASRC_48K_TO_8K_INTEGRATION)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_48K_TO_8K_INTEGRATION"
+  #define APP_BUILD_DETAIL  "48-to-8 kHz decimator feeding near-unity A-to-B ASRC; requires external 8 kHz B transport"
+#elif (APP_BUILD == APP_BUILD_ASRC_CODEC_BIDIR_HEADROOM_M32)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_CODEC_BIDIR_HEADROOM_M32"
+  #define APP_BUILD_DETAIL  "ASRC headroom A/B candidate; M32; raw-tick path profile; sparse LED meter; 10 s telemetry"
+#elif (APP_BUILD == APP_BUILD_ASRC_CODEC_BIDIR_HEADROOM_M30)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_CODEC_BIDIR_HEADROOM_M30"
+  #define APP_BUILD_DETAIL  "ASRC headroom candidate; M30 Kaiser-11 fc0.465; raw-tick path profile; sparse LED meter; 10 s telemetry"
+#elif (APP_BUILD == APP_BUILD_ASRC_CODEC_MEAS_HEADROOM_M30)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_CODEC_MEAS_HEADROOM_M30"
+  #define APP_BUILD_DETAIL  "ASRC M30 Kaiser-11 fc0.465; one-way digital quality capture"
+#elif (APP_BUILD == APP_BUILD_ASRC_CODEC_96K_A_TO_B)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_CODEC_96K_A_TO_B"
+  #define APP_BUILD_DETAIL  "ASRC 96 kHz; physical I2S 2 ch (L/R) + internal 8 ch compute; one-way A->B; WM8904-A ADC-only master, WM8904-B DAC-only codec-master (B-XTAL jumper)"
+#elif (APP_BUILD == APP_BUILD_ASRC_MEAS_96K_A_TO_B)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_MEAS_96K_A_TO_B"
+  #define APP_BUILD_DETAIL  "ASRC 96 kHz MEAS; A->B digital quality capture (THD+N / DR); leg B rate selects direct resampler vs composed pre-stage chain"
+#elif (APP_BUILD == APP_BUILD_ASRC_MEAS_96K_B_TO_A)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_MEAS_96K_B_TO_A"
+  #define APP_BUILD_DETAIL  "ASRC 96 kHz MEAS; B->A digital quality capture (THD+N / DR); 48 k -> 96 k upsample, no front end"
+#elif (APP_BUILD == APP_BUILD_ASRC_AK128_CODEC_BIDIR)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_AK128_CODEC_BIDIR"
+  #define APP_BUILD_DETAIL  "ASRC AK128; TDM8 8ch A<->B; Codec-A/Codec-B master; Curiosity J3 DIM-Pxx U-jumpers"
+#elif (APP_BUILD == APP_BUILD_ASRC_CODEC_96K_12CH_32K)
+  #define APP_BUILD_NAME    "APP_BUILD_ASRC_CODEC_96K_12CH_32K"
+  /* Rear geometry says M=30 because that is what this preset has always BUILT: the
+   * preset-level pin on APP_ASRC_EXPERIMENTAL_M28 was unreachable (this file defaults
+   * the switch to 0 above and only includes the ASRC preset header further down), and
+   * the whole 2026-09-10 validation was taken on M30.  A boot banner is the one line a
+   * human reads to know what is running, so it states the resolved geometry, not an
+   * intent.  See the preset block in asrc/asrc_app_build_config.h and its build guard. */
+  /* THE BANNER IDENTIFIES THE BUILD, NOT THE RUNNING STATE, and the two are not the same
+   * thing here.  APP_ASRC_THIRDBAND_96_TO_32 says the third band is COMPILED IN; which front
+   * end is actually filtering is decided later by APP_ASRC_THIRDBAND_DEFAULT_ON and then by
+   * `*av00`/`*av01` at runtime, so a build with the stage compiled and DEFAULT_ON = 0 boots
+   * on the composed chain.  A banner that named an active front end would be lying in that
+   * perfectly legal configuration.  So it says "compiled" and stops there; the authority on
+   * what is running is the runtime report -- the `ASRC 96->32 front end:` selftest line and
+   * the leg telemetry's `fe=` field -- which reads the armed state itself.
+   *
+   * No measurement verdict either.  Response, margin and reserve depend on the front end
+   * armed, the build layout and the rate pair, so any fixed string is wrong for some image
+   * that carries it: the third band measures 5 % reserve PASS while the composed chain it
+   * replaces measures Hard RT FAIL in the same comparison, and both were once described by
+   * the same literal.  Identity here, numbers from the telemetry.
+   *
+   * `defined()` is the whole test at this point in the chain: apps/asrc/asrc_app_config.h --
+   * the header that defaults the switch to 0 -- is included long after this line, so the only
+   * thing that can be seen here is a command-line opt-in.  Pinning it in a header instead
+   * would make the banner silently wrong again, so asrc_app_validate.h compares the arm taken
+   * here against the resolved value once every fact is settled. */
+  #if defined(APP_ASRC_THIRDBAND_96_TO_32) && (APP_ASRC_THIRDBAND_96_TO_32)
+    #define APP_BUILD_DETAIL_THIRDBAND_COMPILED  (1)
+    #define APP_BUILD_DETAIL  "ASRC 96 kHz leg A -> 32 kHz leg B; 12 ch each way, two engines; Q31, rear M=30, HB31 pre-stage, opt Q31 kernels; third-band 96->32 front end COMPILED -- armed front end is reported at runtime (internal)"
+  #else
+    #define APP_BUILD_DETAIL_THIRDBAND_COMPILED  (0)
+    #define APP_BUILD_DETAIL  "ASRC 96 kHz leg A -> 32 kHz leg B; 12 ch each way, two engines; Q31, rear M=30, HB31 pre-stage, opt Q31 kernels; composed 96->32 front end, third band not compiled (internal)"
+  #endif
+#else
+  /* An APP_BUILD value without an identity entry must fail loudly. */
+  #error "APP_BUILD has no APP_BUILD_NAME/DETAIL entry (retired or unknown preset value)."
+#endif
+
+/*
+ * Compatibility names used by the existing resolved platform configuration.
+ * APP_PROFILE is now derived from APP_BUILD and may not select a different app.
+ */
+#define APP_PROFILE_DEMO  (0)
+#define APP_PROFILE_ASRC  (1)
+
+#ifndef APP_PROFILE
+  #if SONORA_APP_IS_ASRC
+    #define APP_PROFILE  APP_PROFILE_ASRC
+  #else
+    #define APP_PROFILE  APP_PROFILE_DEMO
+  #endif
+#endif
+
+#if SONORA_APP_IS_ASRC && (APP_PROFILE != APP_PROFILE_ASRC)
+  #error "ASRC APP_BUILD variation conflicts with APP_PROFILE. Select the app through APP_BUILD."
+#endif
+#if SONORA_APP_IS_CLASSIC && (APP_PROFILE != APP_PROFILE_DEMO)
+  #error "Classic APP_BUILD variation conflicts with APP_PROFILE. Select the app through APP_BUILD."
+#endif
+
+/* ASRC clock-owner tokens are public only so ASRC variations can be overridden. */
+#define APP_ASRC_CLOCK_OWNER_SPI2   (0)
+#define APP_ASRC_CLOCK_OWNER_CODEC  (1)
+
+#if SONORA_APP_IS_ASRC
+  #include "asrc/asrc_app_build_config.h"
+#else
+  #include "classic/classic_demo_build_config.h"
+#endif
+
+#endif /* SONORA_APP_BUILD_CONFIG_H */

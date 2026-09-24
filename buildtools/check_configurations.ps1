@@ -1,0 +1,601 @@
+<#
+  C0.2 -- the MPLAB project configuration gate.
+
+  configurations.xml is the authority on what each build compiles, and MPLAB X
+  rewrites it whenever the IDE touches the project. It has silently dropped
+  ex="true" attributes before. An exclusion that quietly disappears does not break
+  the build: it makes a standalone application link the download engine without
+  saying so, which is a defect you find on a board rather than at a desk.
+
+  So the per-configuration expectations live here, in a checked-in script that
+  exits non-zero -- not in a document, and not in a throwaway audit run by hand
+  when someone remembers to be suspicious.
+
+  DELIBERATELY NOT A GENERATED BASELINE. The sibling separation ratchet uses a
+  ratchet, which is right for a metric that should only ever fall. This is not
+  that: the values below are design intent (three configurations, two delivery
+  modes), and a regenerable baseline would happily absorb the exact MPLAB X
+  regression this exists to catch. Changing an expectation is an edit to this
+  table, made on purpose, and reviewable as such.
+
+  Companion to Assert-StandaloneMapLayout in build.ps1, which checks the same
+  contract on the LINKED result. This one checks the inputs, and it does so
+  without building -- so it runs in seconds, on any machine, with no toolchain.
+#>
+param(
+    [string]$Root = (Split-Path -Parent $PSScriptRoot),
+    # Test hook: point the checks at a mutated copy of configurations.xml so the
+    # self-test can prove each one actually fires.
+    [string]$ConfigurationsXml
+)
+
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = (Resolve-Path -LiteralPath $Root).Path
+$projectDir = Join-Path $repoRoot 'dspic33ak_audio_dsp.X'
+$confXmlPath = if ([string]::IsNullOrWhiteSpace($ConfigurationsXml)) {
+    Join-Path $projectDir 'nbproject\configurations.xml'
+} else {
+    (Resolve-Path -LiteralPath $ConfigurationsXml).Path
+}
+
+# --- Expectations ----------------------------------------------------------
+# The delivery macro. Set by the configuration itself, which is why build.ps1 no
+# longer injects it (defining it twice was the previous arrangement's failure).
+$deliveryMacro = 'SONORA_DELIVERY_SERIAL_UPDATE_APP=1'
+
+# The serial-update linker script, PER CONFIGURATION. This was one project-level file
+# while AK512 was the only delivered part; the AK128 panel is a quarter the size, so its
+# script is a different file and the project now registers both.
+#
+# That makes the exclusion pattern two-sided, and both sides fail silently:
+#   - a FOREIGN script left unexcluded is a second --script= (MPLAB X hands the linker
+#     every registered script), and the image is linked to whichever it took last;
+#   - a configuration's OWN script excluded falls back to the device pack's default
+#     script, which links a running image at the standalone origin -- over the resident
+#     bootloader.
+# Neither produces a link error, so both are asserted below rather than assumed.
+# Same invariant, same reasoning, as check_resident_project.ps1 section 2.
+$serialUpdateGld = @{
+    'dsPIC33AK512_ASRC_SERIAL_UPDATE'    = '../src/linker/p33AK512MPS512_serial_update_app.gld'
+    'dsPIC33AK512_CLASSIC_SERIAL_UPDATE' = '../src/linker/p33AK512MPS512_serial_update_app.gld'
+    'dsPIC33AK128_SERIAL_UPDATE'         = '../src/linker/p33AK128MC106_serial_update_app.gld'
+    'dsPIC33AK128_ASRC_BI_CODEC_SERIAL_UPDATE' = '../src/linker/p33AK128MC106_serial_update_app.gld'
+}
+# Every script the project is expected to register, deduplicated: one AK512 file shared
+# by its two application variants, one AK128 file.
+$allSerialUpdateGlds = @(@($serialUpdateGld.Values) | Sort-Object -Unique)
+
+# The download engine, as seen by the application project: the ABI pair the two
+# images agree on, the two app-side halves, and the two HAL modules only the
+# delivery path needs. src/boot/** is deliberately absent -- it belongs to the
+# separately linked boot image and must never appear here at all (asserted below as
+# a structural invariant rather than an exclusion: after reorg step 3 the boot files
+# are in another tree that this project has no include path into).
+$engineSources = @(
+    '../src/shared/resident_de_mailbox.c',
+    '../src/shared/resident_de_pipe.c',
+    '../src/app/resident_de/app/resident_de_app_console.c',
+    '../src/app/resident_de/app/resident_de_app_handoff.c',
+    '../src/app/hal_nvm/nora_nvm_dspic33ak.c'
+)
+
+# Sources that must be in EVERY configuration -- the mirror image of $engineSources.
+#
+# Both entries moved here from $engineSources on 2026-08-12. app_traps.c was listed as an
+# engine source because the trap record lives in the noinit block, and the block was
+# reserved only by the serial-update linker script. That made hardware trap diagnostics a
+# property of the delivery mode: the three standalone configurations had no trap handler at
+# all, and -- since main.c calls app_traps_boot_prepare() unconditionally -- did not even
+# link. The block is now reserved in every configuration (a small supplementary linker
+# script per device, see src/linker/p33AK*_noinit_ram_reserve.ld), so the HAL that owns it
+# belongs everywhere too.
+#
+# Stated as a table rather than left implicit because "not excluded" is exactly the
+# attribute MPLAB X rewrites, and a silently re-excluded file here is a diagnostic that
+# stops existing -- or, for the HAL, a link that fails for a reason two files away.
+#
+# traps_console.c joined them on 2026-08-12 for a mechanical reason: app_onmsg() routes
+# module 'x' to it unconditionally, so a configuration that excluded it would fail to link
+# -- the same failure app_traps.c itself used to produce, one file away from its cause.
+$everyConfigurationSources = @(
+    '../src/app/diagnostics/app_traps.c',
+    '../src/app/hal_noinit_ram/nora_noinit_ram_dspic33ak.c',
+    '../src/app/uart_app/traps_console.c'
+)
+
+# The supplementary linker script that reserves the noinit block in a NON-delivery build,
+# per device -- passed as a linker extra option rather than as the project's linker file,
+# because it ADDS to the device default script instead of replacing it. A delivery build
+# must NOT have one: its reservation comes from the full serial-update script, and a second
+# section at the same address would be a duplicate the linker has no reason to diagnose.
+#
+# Standalone configurations use a supplementary reservation script. Delivery
+# configurations use their full serial-update linker script instead. Keep this
+# table and its assertions so a future standalone configuration must declare its
+# reservation explicitly.
+$reserveScriptOption = @{
+    'dsPIC33AK512MPS506_CLASSIC_DRC' = '-Wl,-T../src/linker/p33AK512MPS506_noinit_ram_reserve.ld'
+}
+
+# Exactly these three configurations, each classified. A NEW configuration must be
+# added here on purpose: without this the gate would simply not look at it, which
+# is the quietest way for an unchecked build variant to appear.
+#
+# Delivery mode is declared for each configuration. The standalone assertions
+# below remain applicable to any future standalone entry; see
+# $reserveScriptOption.
+$expectedConfigurations = [ordered]@{
+    'dsPIC33AK512MPS506_CLASSIC_DRC' = @{ Delivery = $false }
+    'dsPIC33AK512_ASRC_SERIAL_UPDATE'    = @{ Delivery = $true  }
+    'dsPIC33AK512_CLASSIC_SERIAL_UPDATE' = @{ Delivery = $true  }
+    'dsPIC33AK128_SERIAL_UPDATE'         = @{ Delivery = $true  }
+    'dsPIC33AK128_ASRC_BI_CODEC_SERIAL_UPDATE' = @{ Delivery = $true  }
+}
+
+# Tracked sources under src/app/, src/shared/ and src/boot/ that are intentionally NOT registered in this project.
+# Listed with a reason so that "this file is never compiled" stays a decision
+# somebody made, instead of something nobody noticed.
+$unregisteredByDesign = [ordered]@{
+    # One rule, not a file list: NOTHING under src/boot/ is ever registered here. That is
+    # the bulkhead, and it is asserted positively a few lines below as well -- this entry
+    # only stops the "every tracked source is registered" sweep from demanding it.
+    # Note this also excuses the src/boot/hal_*/*.c that the BOOT image does not compile
+    # either (3 of 20 as of reorg step 4: nora_gpio_event, nora_gpio_table,
+    # nora_high_res_timer). They are there because the HAL directories were vendored
+    # WHOLE rather than file-by-file (procedure section 8, decision 3), so a header that
+    # a boot source starts needing tomorrow is already present. Whether the boot image
+    # compiles a given src/boot/ source is the boot project's business, and reorg step 5
+    # gives it its own checked list in src/boot/boot_image.psd1.
+    'src/boot/'                         = 'the legacy resident boot image is linked separately; no src/boot/ source may ever be registered in the application project'
+    'src/app/dspic33-cmsis-dsp/Source/' = 'third-party CMSIS-DSP; only the kernels actually used are registered'
+    'src/app/apps/classic/dsp/'         = 'legacy Classic DSP blocks kept in-tree but not in any current build'
+}
+
+# --- Load -------------------------------------------------------------------
+[xml]$xml = Get-Content -LiteralPath $confXmlPath -Raw
+$problems = [System.Collections.Generic.List[string]]::new()
+
+function Add-Problem {
+    param([string]$Configuration, [string]$Message)
+    $prefix = if ([string]::IsNullOrWhiteSpace($Configuration)) { '' } else { "[$Configuration] " }
+    $problems.Add($prefix + $Message)
+}
+
+$confNodes = @($xml.configurationDescriptor.confs.conf)
+if ($confNodes.Count -eq 0) {
+    throw "No <conf> elements found in $confXmlPath -- the file is not the MPLAB project descriptor this check understands."
+}
+
+# --- 1. The configuration set itself ---------------------------------------
+$actualNames = @($confNodes | ForEach-Object { $_.name })
+$unexpected = @($actualNames | Where-Object { -not $expectedConfigurations.Contains($_) })
+$absent = @($expectedConfigurations.Keys | Where-Object { $actualNames -notcontains $_ })
+foreach ($n in $unexpected) {
+    Add-Problem '' ("configuration '$n' is not in this gate's expectation table. Add it to " +
+                    '$expectedConfigurations with its delivery mode -- an unclassified ' +
+                    'configuration is not checked at all.')
+}
+foreach ($n in $absent) {
+    Add-Problem '' "expected configuration '$n' is missing from the project."
+}
+
+# --- 2. itemPath registration ----------------------------------------------
+$itemPaths = @($xml.SelectNodes('//itemPath') | ForEach-Object { $_.InnerText })
+$registered = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($p in $itemPaths) {
+    $full = [IO.Path]::GetFullPath((Join-Path $projectDir $p))
+    if (-not (Test-Path -LiteralPath $full)) {
+        Add-Problem '' "registered source does not exist on disk: $p (a rename or delete left the project dangling)"
+    }
+    $rel = $full.Substring($repoRoot.Length).TrimStart('\', '/').Replace('\', '/')
+    [void]$registered.Add($rel)
+}
+
+# The boot image's sources must not be in the application project under any
+# configuration -- not registered-and-excluded, but absent. Delivery mode is a
+# property of the application build; the boot image is a different link entirely.
+foreach ($rel in $registered) {
+    if ($rel -like 'src/boot/*') {
+        Add-Problem '' ("boot-image source '$rel' is registered in the application project. " +
+                        'It belongs only to the separately linked resident boot image.')
+    }
+}
+
+# Every tracked source is either registered or listed as unregistered by design.
+# This one check needs git. It is repo hygiene rather than image layout, so a
+# missing/failing git is reported and skipped instead of failing the gate -- this
+# script runs from build.ps1, and "no git here" must not be able to stop a build.
+# Everything above and below is decided from configurations.xml and the disk alone.
+$trackedSources = @()
+$trackedKnown = $false
+$gitOutput = $null
+try { $gitOutput = @(& git -C $repoRoot ls-files -- src/app src/shared src/boot 2>$null) } catch { $gitOutput = $null }
+if ($LASTEXITCODE -eq 0 -and $null -ne $gitOutput) {
+    $trackedKnown = $true
+    $trackedSources = @($gitOutput |
+        ForEach-Object { $_.Replace('\', '/') } |
+        Where-Object { $_ -match '\.(c|s|S)$' })
+} else {
+    Write-Host '  NOTE: git ls-files unavailable - skipping the "every tracked source is registered" check.'
+}
+foreach ($src in $trackedSources) {
+    if ($registered.Contains($src)) { continue }
+    $excusedBy = @($unregisteredByDesign.Keys | Where-Object { $src.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) })
+    if ($excusedBy.Count -eq 0) {
+        Add-Problem '' ("tracked source '$src' is not registered in the project and is not covered " +
+                        'by $unregisteredByDesign. It is silently never compiled -- register it, or ' +
+                        'record why it is not built.')
+    }
+}
+
+# Each serial-update linker script is registered exactly once, project-wide -- and no
+# OTHER .gld is registered at all. The second half matters now that there is more than
+# one: an extra script nobody named is one no configuration excludes, and MPLAB X passes
+# it to every link.
+foreach ($gld in $allSerialUpdateGlds) {
+    $gldRegistrations = @($itemPaths | Where-Object { $_ -eq $gld })
+    if ($gldRegistrations.Count -ne 1) {
+        Add-Problem '' "the serial-update linker script should be registered exactly once as '$gld'; found $($gldRegistrations.Count)."
+    }
+}
+foreach ($stray in @($itemPaths | Where-Object { $_ -like '*.gld' -and $allSerialUpdateGlds -notcontains $_ })) {
+    Add-Problem '' ("linker script '$stray' is registered but is not named by `$serialUpdateGld. " +
+                    'MPLAB X hands every registered script to the linker, so no configuration ' +
+                    'excludes it and every link gets a second --script=.')
+}
+
+# --- 3. Per-configuration state --------------------------------------------
+foreach ($conf in $confNodes) {
+    $name = $conf.name
+    if (-not $expectedConfigurations.Contains($name)) { continue }
+    $isDelivery = [bool]$expectedConfigurations[$name].Delivery
+
+    # Excluded item paths for this configuration.
+    $excluded = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in @($conf.SelectNodes('.//item'))) {
+        if ($item.GetAttribute('ex') -eq 'true') { [void]$excluded.Add($item.GetAttribute('path')) }
+    }
+
+    # 3a. The delivery macro. Checked in every non-empty preprocessor-macros
+    # property, because MPLAB X keeps one per tool and setting only some of them
+    # is a real way to get a half-configured build.
+    $macroProps = @($conf.SelectNodes('.//property[@key="preprocessor-macros"]') |
+        ForEach-Object { $_.GetAttribute('value') })
+    $nonEmpty = @($macroProps | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $withMacro = @($nonEmpty | Where-Object { $_ -split ';' -contains $deliveryMacro })
+    if ($isDelivery) {
+        if ($nonEmpty.Count -eq 0) {
+            Add-Problem $name "no preprocessor macros are set at all, but this is a delivery configuration; $deliveryMacro must be defined."
+        } elseif ($withMacro.Count -ne $nonEmpty.Count) {
+            Add-Problem $name ("$deliveryMacro is defined in only $($withMacro.Count) of " +
+                               "$($nonEmpty.Count) macro lists. Every tool that compiles this " +
+                               'configuration must see it, or the two halves of the image disagree.')
+        }
+    } else {
+        if ($withMacro.Count -gt 0) {
+            Add-Problem $name "$deliveryMacro is defined, but this is a standalone configuration."
+        }
+    }
+
+    # 3a2. Every include directory exists on disk. A non-existent -I path
+    # contributes nothing and can hide a missing header. This also catches a
+    # partially updated directory rename.
+    foreach ($prop in @($conf.SelectNodes('.//property[@key="extra-include-directories"]')) +
+                      @($conf.SelectNodes('.//property[@key="extra-include-directories-for-assembler"]'))) {
+        $value = $prop.GetAttribute('value')
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        foreach ($dir in ($value -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+            $full = [IO.Path]::GetFullPath((Join-Path $projectDir $dir))
+            if (-not (Test-Path -LiteralPath $full -PathType Container)) {
+                Add-Problem $name ("include directory '$dir' does not exist. Either the path is stale " +
+                                   '(it then contributes nothing and hides a missing header) or a rename ' +
+                                   'rewrote only part of the list.')
+            }
+        }
+    }
+
+    # 3b. The linker scripts -- this configuration's own, and every other one.
+    $ownGld = $serialUpdateGld[$name]
+    if ($isDelivery -and -not $ownGld) {
+        Add-Problem $name 'is a delivery configuration with no entry in $serialUpdateGld. Name the serial-update linker script for its device.'
+    }
+    foreach ($gld in $allSerialUpdateGlds) {
+        $gldExcluded = $excluded.Contains($gld)
+        if ($gld -eq $ownGld) {
+            if ($gldExcluded) {
+                Add-Problem $name ("its own serial-update linker script '$gld' is excluded, so the " +
+                                   "link falls back to the device pack's default script: the application " +
+                                   'would be linked at the standalone origin and overwrite the resident bootloader.')
+            }
+        } elseif (-not $gldExcluded) {
+            $why = if ($isDelivery) {
+                "it belongs to another device and would be a second --script= alongside '$ownGld'."
+            } else {
+                'a standalone image must use the device default layout.'
+            }
+            Add-Problem $name "serial-update linker script '$gld' is NOT excluded; $why"
+        }
+    }
+
+    # 3c. The download engine sources. This is the check the ex="true" loss story
+    # is about: for a standalone configuration each must be present in the project
+    # AND excluded from this configuration.
+    foreach ($src in $engineSources) {
+        $isRegistered = $itemPaths -contains $src
+        if (-not $isRegistered) {
+            Add-Problem $name "download-engine source '$src' is not registered in the project at all."
+            continue
+        }
+        $isExcluded = $excluded.Contains($src)
+        if (-not $isDelivery -and -not $isExcluded) {
+            Add-Problem $name ("download-engine source '$src' is NOT excluded. This standalone build " +
+                               'would link the download engine. If MPLAB X rewrote this file, the ' +
+                               'ex="true" attribute was dropped -- restore it.')
+        }
+        if ($isDelivery -and $isExcluded) {
+            Add-Problem $name "download-engine source '$src' is excluded, but this configuration needs it."
+        }
+    }
+
+    # 3d. Sources every configuration must compile, delivery mode notwithstanding.
+    foreach ($src in $everyConfigurationSources) {
+        if ($itemPaths -notcontains $src) {
+            Add-Problem $name "'$src' is not registered in the project at all, but every configuration must compile it."
+            continue
+        }
+        if ($excluded.Contains($src)) {
+            Add-Problem $name ("'$src' is excluded, but it must be compiled by every configuration. " +
+                               'If MPLAB X rewrote this file, an ex="true" was added -- remove it.')
+        }
+    }
+
+    # 3e. The noinit-block reservation for non-delivery builds. It rides in the linker's
+    # extra-options field, which is a free-text box: a value lost to an IDE round-trip
+    # leaves a build that links, runs, and quietly lets the automatic stack have the
+    # block -- so the expected string is pinned here rather than trusted.
+    $ldExtra = @($conf.SelectNodes('.//property[@key="oXC16ld-extra-opts"]') |
+        ForEach-Object { $_.GetAttribute('value') })
+    $expectedOption = $reserveScriptOption[$name]
+    if ($isDelivery) {
+        if ($expectedOption) {
+            Add-Problem $name 'is a delivery configuration but has an entry in $reserveScriptOption. Its reservation comes from the full serial-update linker script.'
+        }
+        $withReserve = @($ldExtra | Where-Object { $_ -like '*_noinit_ram_reserve.ld*' })
+        if ($withReserve.Count -gt 0) {
+            Add-Problem $name 'passes a *_noinit_ram_reserve.ld script, but its linker script already reserves the block. Two sections at one address is not something the linker has to diagnose.'
+        }
+    } else {
+        if (-not $expectedOption) {
+            Add-Problem $name 'is a standalone configuration with no entry in $reserveScriptOption. Every configuration needs the noinit block reserved -- name the script for this device.'
+        } elseif (-not ($ldExtra -contains $expectedOption)) {
+            $shown = if ($ldExtra.Count -gt 0) { ($ldExtra | ForEach-Object { "'$_'" }) -join ', ' } else { '(none)' }
+            Add-Problem $name ("the linker extra options must contain '$expectedOption' so the noinit " +
+                               "block is reserved; found $shown.")
+        }
+    }
+}
+
+# --- 4. DFP pack pins ------------------------------------------------------
+# The application project pins a device pack version per configuration (Project
+# Properties -> Packs in the IDE, <packs><pack> here); src/boot/boot_image.psd1 pins
+# one per device for the resident boot image. They must agree, and nothing else in
+# either build checks that they do.
+#
+# WHY THIS IS AN ERROR AND NOT A WARNING. Both halves still compile and link with
+# different pack versions, and the resulting hex still runs. What differs is the
+# register definitions and config-pragma value names the two images were built
+# against, for the same silicon, in a pair of images that are flashed together and
+# share a mailbox ABI. Nothing downstream reports it.
+#
+# Only delivery configurations are compared. A standalone configuration ships without
+# a resident boot image, so there is no second half for it to disagree with.
+#
+# The pins are deliberate. This check never prefers the newer pack -- it only insists
+# the two halves name the same one. Raising a pin is a deliberate edit to
+# boot_image.psd1 AND to the IDE project; both were raised to the newest installed
+# pack on 2026-08-29 (MP 1.5.269, MC 1.6.272) once the two things that had held them
+# back were taken up in the sources: the PLLxCON.OE writes (a bit that does not exist)
+# and the NOBTSWP value rename.
+. (Join-Path $PSScriptRoot 'boot_image.ps1')
+$bootManifest = Get-BootImageManifest -RepoRoot $repoRoot
+$dfpMismatches = [System.Collections.Generic.List[object]]::new()
+
+foreach ($conf in $confNodes) {
+    $name = $conf.name
+    if (-not $expectedConfigurations.Contains($name)) { continue }
+    if (-not [bool]$expectedConfigurations[$name].Delivery) { continue }
+
+    $device = $conf.toolsSet.targetDevice
+    # The manifest keys devices without the 'dsPIC' prefix the project uses.
+    $deviceKey = $device -replace '^dsPIC', ''
+    if (-not $bootManifest.Devices.ContainsKey($deviceKey)) {
+        Add-Problem $name ("is a delivery configuration for $device, but src/boot/boot_image.psd1 " +
+                           'has no resident boot image for that part. A delivery build needs one: ' +
+                           'add the device to the manifest, or make this configuration standalone.')
+        continue
+    }
+    $bootEntry = $bootManifest.Devices[$deviceKey]
+
+    $packNodes = @($conf.SelectNodes('./packs/pack'))
+    if ($packNodes.Count -eq 0) {
+        Add-Problem $name ("names no device pack. MPLAB X writes <packs><pack .../> per " +
+                           "configuration; without it the IDE picks a version on its own, and " +
+                           "the resident boot image is pinned to $($bootEntry.DfpPack) " +
+                           "$($bootEntry.DfpPackVersion).")
+        continue
+    }
+    if ($packNodes.Count -gt 1) {
+        $listed = ($packNodes | ForEach-Object { "$($_.GetAttribute('name')) $($_.GetAttribute('version'))" }) -join ', '
+        Add-Problem $name "names $($packNodes.Count) device packs ($listed); this check expects exactly one."
+        continue
+    }
+
+    $appPack = $packNodes[0].GetAttribute('name')
+    $appVersion = $packNodes[0].GetAttribute('version')
+
+    # The pack FAMILY, checked before the version: the two parts are in different
+    # families (MP for the MPS512, MC for the MC106), so a device change in the IDE
+    # moves this too. A wrong family is a louder failure than a wrong version --
+    # "pack does not support" at build time, "architecture UNKNOWN" under objdump --
+    # but it is the same edit that causes it, so it is caught in the same place.
+    if ($appPack -ne $bootEntry.DfpPack) {
+        $dfpMismatches.Add([pscustomobject]@{
+            Configuration = $name; Device = $device; Kind = 'family'
+            AppPack = $appPack; AppVersion = $appVersion
+            BootPack = $bootEntry.DfpPack; BootVersion = $bootEntry.DfpPackVersion
+        })
+        Add-Problem $name ("names device pack family '$appPack', but $device is served by " +
+                           "'$($bootEntry.DfpPack)' (src/boot/boot_image.psd1). See the DFP note below.")
+        continue
+    }
+    if ($appVersion -ne $bootEntry.DfpPackVersion) {
+        $dfpMismatches.Add([pscustomobject]@{
+            Configuration = $name; Device = $device; Kind = 'version'
+            AppPack = $appPack; AppVersion = $appVersion
+            BootPack = $bootEntry.DfpPack; BootVersion = $bootEntry.DfpPackVersion
+        })
+        Add-Problem $name ("pins $appPack $appVersion, but the resident boot image for $device " +
+                           "is pinned to $($bootEntry.DfpPackVersion) (src/boot/boot_image.psd1). " +
+                           'See the DFP note below.')
+    }
+}
+
+# --- The DFP note ----------------------------------------------------------
+# Printed as its own block rather than squeezed into a one-line problem: the person
+# who reaches this has just changed something in an IDE dialog, and what they need is
+# which two files disagree, why it matters, and both ways out -- including the GUI
+# gesture, because that is where the change came from.
+function Write-DfpMismatchExplanation {
+    param([object[]]$Mismatches)
+
+    Write-Host ''
+    # Family and version are both possible, and saying "version" over a family
+    # mismatch would send the reader looking at the wrong attribute.
+    $kinds = @(@($Mismatches | ForEach-Object { $_.Kind }) | Sort-Object -Unique)
+    $what = if ($kinds -contains 'family' -and $kinds -contains 'version') { 'pack family and version' }
+            elseif ($kinds -contains 'family') { 'pack family' }
+            else { 'pack version' }
+    Write-Host "DFP $what mismatch between the application project and the resident boot image." -ForegroundColor Red
+    Write-Host ''
+    foreach ($m in $Mismatches) {
+        Write-Host "  device $($m.Device)  (configuration $($m.Configuration))"
+        Write-Host "    application   dspic33ak_audio_dsp.X/nbproject/configurations.xml"
+        Write-Host "                  -> $($m.AppPack) $($m.AppVersion)"
+        Write-Host "    resident boot src/boot/boot_image.psd1"
+        Write-Host "                  -> $($m.BootPack) $($m.BootVersion)"
+    }
+    Write-Host ''
+    Write-Host 'WHY THIS IS AN ERROR AND NOT A WARNING'
+    Write-Host '  Both halves would still compile and link, and the resulting hex would run.'
+    Write-Host '  But the application and the boot image would be built against DIFFERENT'
+    Write-Host '  register definitions for the same silicon, and they are flashed together and'
+    Write-Host '  share a mailbox ABI. Nothing tells you afterwards.'
+    Write-Host ''
+    Write-Host 'HOW TO FIX -- pick ONE, then make the other match:'
+    Write-Host '  a) You changed the pack in the MPLAB X GUI on purpose:'
+    Write-Host '       edit src/boot/boot_image.psd1 and set DfpPackVersion for this device to'
+    Write-Host '       the version you chose, then rebuild the resident boot image with'
+    Write-Host '       buildtools/build_resident_bootloader.ps1 -Full.'
+    Write-Host '       Expect real work, not just an edit. Two examples already met, both'
+    Write-Host '       taken up in the sources on 2026-08-29 --'
+    Write-Host '         dsPIC33AK-MC_DFP 1.5.263+ removed PLL1CON.OE / PLL2CON.OE, which'
+    Write-Host '           src/boot/hal_clock/nora_clock_dspic33ak_reg.c used to write;'
+    Write-Host '         dsPIC33AK-MP_DFP 1.4.260+ renamed the NOBTSWP values ON/OFF to'
+    Write-Host '           BTSWP_ENABLED/BTSWP_DISABLED, which src/boot/resident_de_boot_main.c'
+    Write-Host '           and src/app/main.c now spell.'
+    Write-Host '  b) You did NOT intend to change it -- MPLAB X can rewrite configurations.xml'
+    Write-Host '     on its own whenever the IDE touches the project:'
+    Write-Host '       in MPLAB X, right-click the project -> Properties -> Packs, and select the'
+    Write-Host '       version src/boot/boot_image.psd1 names for this device; or revert'
+    Write-Host '       dspic33ak_audio_dsp.X/nbproject/configurations.xml.'
+    Write-Host ''
+    Write-Host 'The pinned versions are deliberate and are floors, not preferences. The reason for'
+    Write-Host 'each one is written beside it in src/boot/boot_image.psd1.'
+}
+
+# --- Newer packs installed -------------------------------------------------
+# A pin means the build ignores a newer pack, which is the intended behaviour and must
+# not be a warning -- twice now the newer pack has been the broken one. But silently
+# ignoring it forever is how a pin turns into something nobody remembers deciding.
+#
+# So: a plain note, and only for a version this clone has not mentioned before. Said
+# every build it would stop being read by the third one; said never, the pin rots.
+# The marker file is untracked and per-clone, and deleting it only costs one repeat.
+function Write-DfpNewerPackNote {
+    param([hashtable]$BootManifest, [string]$RepoRoot)
+
+    $seenPath = Join-Path $RepoRoot 'buildtools\dfp_pack_notice.json'
+    $seen = @{}
+    if (Test-Path -LiteralPath $seenPath) {
+        try {
+            $json = Get-Content -LiteralPath $seenPath -Raw | ConvertFrom-Json
+            foreach ($property in $json.PSObject.Properties) { $seen[$property.Name] = [string]$property.Value }
+        } catch {
+            # An unreadable marker is not a reason to fail a gate, nor to be silent:
+            # it just means this note is said once more than it had to be.
+            $seen = @{}
+        }
+    }
+
+    $notes = @()
+    $updated = $false
+    foreach ($deviceKey in (@($BootManifest.Devices.Keys) | Sort-Object)) {
+        $entry = $BootManifest.Devices[$deviceKey]
+        $pinned = $null
+        if (-not [Version]::TryParse($entry.DfpPackVersion, [ref]$pinned)) { continue }
+
+        $installed = @(Get-BootImageInstalledDfpVersions -Pack $entry.DfpPack -Device $deviceKey |
+            Where-Object { $_.Version -gt $pinned })
+        if ($installed.Count -eq 0) { continue }
+
+        $newest = $installed[0].Name
+        if ($seen[$entry.DfpPack] -eq $newest) { continue }
+        $seen[$entry.DfpPack] = $newest
+        $updated = $true
+        $notes += "  note: $($entry.DfpPack) $newest is installed; this project is pinned to $($entry.DfpPackVersion) for $deviceKey (intentional)."
+    }
+
+    if ($notes.Count -eq 0) { return }
+    foreach ($n in $notes) { Write-Host $n }
+    Write-Host '        Newest-installed is not the default here on purpose -- see src/boot/boot_image.psd1.'
+    Write-Host '        To evaluate a newer pack, ask for a pack bump: it needs both pins raised,'
+    Write-Host '        all configurations rebuilt with -Full, and a run on both parts.'
+
+    if ($updated) {
+        try {
+            $payload = [ordered]@{}
+            $payload['comment'] = 'Which newer-than-pinned DFP pack versions this clone has already been told about, so buildtools/check_configurations.ps1 says it once instead of every build. Untracked; deleting it only repeats the note.'
+            foreach ($key in (@($seen.Keys) | Sort-Object)) { $payload[$key] = $seen[$key] }
+            $out = ($payload | ConvertTo-Json -Depth 3) -replace '(?<!\r)\n', "`r`n"
+            [System.IO.File]::WriteAllText($seenPath, $out + "`r`n", [System.Text.UTF8Encoding]::new($false))
+        } catch {
+            # Read-only tree, or a parallel build writing the same file. Neither is a
+            # reason to fail: the only consequence is that the note repeats.
+        }
+    }
+}
+
+# --- Report -----------------------------------------------------------------
+Write-Host "Configuration gate: $confXmlPath"
+$trackedText = if ($trackedKnown) { "$($trackedSources.Count) tracked source(s) under src/app/ + src/shared/ + src/boot/" } else { 'tracked sources not checked' }
+Write-Host ("  $($confNodes.Count) configuration(s), $($itemPaths.Count) registered item(s), " + $trackedText)
+
+if ($problems.Count -gt 0) {
+    Write-Host ''
+    Write-Host "Configuration gate FAILED: $($problems.Count) problem(s)" -ForegroundColor Red
+    foreach ($p in $problems) { Write-Host "  - $p" }
+    if ($dfpMismatches.Count -gt 0) { Write-DfpMismatchExplanation -Mismatches $dfpMismatches }
+    Write-Host ''
+    Write-Host 'These expectations are design intent, not a generated baseline. If a change here'
+    Write-Host 'is intended, edit the tables at the top of this script deliberately.'
+    exit 1
+}
+
+foreach ($name in $expectedConfigurations.Keys) {
+    $mode = if ($expectedConfigurations[$name].Delivery) { 'delivery  ' } else { 'standalone' }
+    Write-Host "  $mode  $name"
+}
+Write-DfpNewerPackNote -BootManifest $bootManifest -RepoRoot $repoRoot
+Write-Host 'Configuration gate: PASS'
+exit 0
